@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KHANHVY</title>
+    <link rel="stylesheet" href="static/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300..700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div id="title">
+                <h2>QUAN HUY GAY</h2>
+            </div>
+            <div class="search-section">
+                <label for="search">CLIP search</label>
+                <textarea id="search" rows="5"></textarea>
+            </div>
+            <div class="search-section">
+                <label for="search_ocr">OCR search</label>
+                <textarea id="search_ocr" rows="2"></textarea>
+            </div>
+            <div class="search-section">
+                <label for="topk">Top k</label>
+                <select id="topk">
+                    <option value="300">300</option>
+                    <option value="500">500</option>
+                    <option value="800">800</option>
+                    <option value="1000">1000</option>
+                    <option value="2000">2000</option>
+                </select>
+            </div>
+
+            <!-- Added: SUBMIT title and placeholders -->
+            <div class="submit-section">
+                <div id="submit-title" class="submit-title">
+                    <h2>SUBMIT</h2>
+                </div>
+                <div class="submit-inputs">
+                    <label for="video_id">Video_ID</label>
+                    <input id="video_id" type="text" placeholder="Video_ID">
+
+                    <label for="start">Start</label>
+                    <input id="start" type="text" placeholder="Start">
+
+                    <label for="end">End</label>
+                    <input id="end" type="text" placeholder="End">
+
+                    <label for="qa_answer">QA_Answer</label>
+                    <textarea id="qa_answer" rows="2" placeholder="QA_Answer"></textarea>
+
+                    <label for="frame_id">Frame_ID</label>
+                    <input id="frame_id" type="text" placeholder="Frame_ID">
+                </div>
+
+                <!-- Added: send button under the submit inputs -->
+                <div class="button-section">
+                    <button id="send-button" class="send-button" type="button">send</button>
+                </div>
+            </div>
+            <!-- End added section -->
+
+        </aside>
+
+        <!-- Gallery -->
+        <main class="gallery-container">
+            <div id="gallery" class="gallery"></div>
+        </main>
+    </div>
+
+    <!-- Popup -->
+    <div id="popup-container" class="popup-container">
+        <div class="popup-content">
+            <button class="close-button">✖</button>
+            <img id="popup-image" src="" alt="Popup Image">
+            <!-- Optional: Add a separator for clarity -->
+            <hr style="width: 80%; margin: 18px auto 10px auto; border: 0; border-top: 1.5px solid #eee;">
+            <!-- Popup buttons row -->
+            <div class="popup-buttons">
+                <a id="youtube-btn" class="button youtube-btn" href="#" target="_blank" style="display: none;">YouTube</a>
+                <button id="popup-send-button" class="button submit-btn">Submit</button>
+                <button id="nearby-btn" class="button nearby-btn">Nearby</button>
+            </div>
+            <!-- Popup submit form (only editable fields) -->
+            <div id="popup-submit" style="width:90%; max-width:520px; margin:8px auto 0; text-align:left;">
+                <label for="popup_qa_answer">QA_Answer</label>
+                <textarea id="popup_qa_answer" rows="2" placeholder="QA answer (optional)" style="width:100%; padding:6px; margin:6px 0;"></textarea>
+                <label for="popup_frame_id">Frame_ID</label>
+                <input id="popup_frame_id" type="text" placeholder="Frame ID (optional)" style="width:100%; padding:6px; margin:6px 0;">
+            </div>
+            <!-- Nearby images row -->
+            <div id="popup-nearby" style="display: none;">
+                <button id="nearby-back">&lt;</button>
+                <div id="nearby-images"></div>
+                <button id="nearby-forward">&gt;</button>
+            </div>
+            <!-- Full gallery -->
+            <div id="full-gallery" class="full-gallery" style="display: none;"></div>
+            <div id="popup-info"></div>
+            <div id="popup-data"></div>
+            
+        </div>
+    </div>
+
+    <script src="/static/player.js"></script>
+</body>
+</html>

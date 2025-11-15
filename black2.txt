@@ -1,0 +1,176 @@
+  let selectedImages = new Set();
+
+  // Biến lưu trạng thái popup
+  let currentGroup = [];
+  let currentIndex = -1;
+  let currentVideoId = null;
+  let currentCsvData = [];
+  let currentFrameN = null; // current frame number (n in CSV)
+
+  // --- Helper: find CSV row by frame_n ---
+  function findCsvRowByN(n) {
+    return currentCsvData.find(row => row.n === n);
+  }
+
+  // --- Helper: show nearby images row by frame_n ---
+  function updateNearbyRowByFrameN(frameN) {
+    if (!currentCsvData.length) return;
+    const idx = currentCsvData.findIndex(row => row.n === frameN);
+    if (idx === -1) return;
+    let start = Math.max(0, idx - 2);
+    let end = Math.min(currentCsvData.length - 1, idx + 2);
+    if (end - start < 4) {
+      if (start === 0) end = Math.min(currentCsvData.length - 1, start + 4);
+      else if (end === currentCsvData.length - 1) start = Math.max(0, end - 4);
+    }
+    nearbyImages.innerHTML = "";
+    for (let i = start; i <= end; ++i) {
+      const row = currentCsvData[i];
+      const img = document.createElement("img");
+      const frameStr = String(row.n).padStart(3, '0');
+      img.src = `/images/${currentVideoId.split("_")[0]}/keyframes/${currentVideoId}/${frameStr}.jpg`;
+      if (row.n === frameN) {
+        img.style.border = "3px solid #00f";
+      }
+      img.title = `Frame: ${row.n}`;
+      img.addEventListener("click", () => {
+        showImageByFrameN(row.n);
+      });
+      nearbyImages.appendChild(img);
+    }
+    // Enable/disable nav buttons
+    nearbyBack.disabled = (idx <= 0);
+    nearbyForward.disabled = (idx >= currentCsvData.length - 1);
+  }
+
+  // --- Show image by frame_n (n in CSV) ---
+  function showImageByFrameN(frameN) {
+    const row = findCsvRowByN(frameN);
+    if (!row) return;
+    currentFrameN = frameN;
+    const frameStr = String(row.n).padStart(3, '0');
+    popupImage.src = `/images/${currentVideoId.split("_")[0]}/keyframes/${currentVideoId}/${frameStr}.jpg`;
+    popupInfo.innerHTML = `Video: ${currentVideoId}<br>Frame: ${row.n}<br>Frame_idx: ${row.frame_idx}`;
+    // --- Build YouTube link ---
+    let ytUrl = null;
+    if (videos[currentVideoId] && typeof row.pts_time === "number") {
+      const pts_time = Math.floor(row.pts_time);
+      ytUrl = videos[currentVideoId].replace(/t=\d*$/, `t=${pts_time}`);
+      if (!ytUrl.includes("t=")) ytUrl += pts_time;
+    }
+    if (ytUrl) {
+      popupInfo.innerHTML += `<br>Link: <a href="${ytUrl}" target="_blank">${ytUrl}</a>`;
+      youtubeBtn.href = ytUrl;
+      youtubeBtn.style.display = "inline-block";
+    } else {
+      youtubeBtn.style.display = "none";
+    }
+    updateNearbyRowByFrameN(frameN);
+  }
+
+  // --- When opening popup, set up CSV and frameN ---
+  function openPopupWithResult(res) {
+    currentVideoId = res.video_id;
+    currentCsvData = Array.isArray(res.csv_data) ? res.csv_data : [];
+    currentFrameN = typeof res.frame_id === "number" ? res.frame_id : parseInt(res.frame_id, 10);
+    showImageByFrameN(currentFrameN);
+    popupContainer.style.display = "flex";
+  }
+
+  // Hàm search
+  async function doSearch(query) {
+    if (!query) return alert("Please enter a query!");
+    const topk = topKSelect.value;
+
+    try {
+      const res = await fetch(`/search_clip?query=${encodeURIComponent(query)}&topk=${topk}`);
+      const data = await res.json();
+
+      gallery.innerHTML = "";
+      if (!data || !data.results) return alert("No results found");
+
+      // Scroll to top after new search
+      if (galleryContainer) galleryContainer.scrollTop = 0;
+
+      const grouped = {};
+      data.results.forEach(r => {
+        if (!grouped[r.video_id]) grouped[r.video_id] = [];
+        grouped[r.video_id].push(r);
+      });
+
+      Object.keys(grouped).forEach(videoId => {
+        const title = document.createElement("p");
+        title.textContent = videoId;
+        title.className = "video-title";
+        gallery.appendChild(title);
+
+        const group = document.createElement("div");
+        group.className = "video-group";
+
+        grouped[videoId].forEach((res, index, array) => {
+          const img = document.createElement("img");
+          img.src = res.image_path;
+          img.addEventListener("click", () => {
+            currentGroup = array;
+            currentIndex = index;
+            openPopupWithResult(res);
+          });
+          group.appendChild(img);
+        });
+        gallery.appendChild(group);
+      });
+    } catch (err) {
+      console.error(err);
+      alert("Error fetching results");
+    }
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (popupContainer.style.display === "flex") {
+      if (e.key === "ArrowRight") {
+        nearbyForward.click();
+      } else if (e.key === "ArrowLeft") {
+        nearbyBack.click();
+      } else if (e.key === "Escape") {
+        closePopup();
+      }
+    }
+  });
+
+  // Đóng popup
+  function closePopup() {
+    popupContainer.style.display = "none";
+    currentGroup = [];
+    currentIndex = -1;
+  }
+
+  document.querySelector(".close-button").addEventListener("click", closePopup);
+  popupContainer.addEventListener("click", e => {
+    if (e.target === popupContainer) closePopup();
+  });
+
+  // Enter trong search & OCR => trigger search
+  [searchInput, searchOCR].forEach(input => {
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        doSearch(searchInput.value.trim() || searchOCR.value.trim());
+      }
+    });
+  });
+
+  // --- Add event listeners for nav buttons ---
+  nearbyBack.addEventListener("click", () => {
+    if (!currentCsvData.length) return;
+    const idx = currentCsvData.findIndex(row => row.n === currentFrameN);
+    if (idx > 0) {
+      showImageByFrameN(currentCsvData[idx - 1].n);
+    }
+  });
+  nearbyForward.addEventListener("click", () => {
+    if (!currentCsvData.length) return;
+    const idx = currentCsvData.findIndex(row => row.n === currentFrameN);
+    if (idx < currentCsvData.length - 1) {
+      showImageByFrameN(currentCsvData[idx + 1].n);
+    }
+  });

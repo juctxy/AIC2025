@@ -1,0 +1,10 @@
+flask
+sentence-transformers
+faiss-cpu
+numpy
+scikit-learn
+pytesseract
+opencv-python
+farm-haystack[sql]
+haystack  
+langdetect
