@@ -12,11 +12,6 @@ torchvision
 pillow
 
 
-pytesseract
-opencv-python
-scikit-learn
-
-
 deep-translator
 langdetect
 
