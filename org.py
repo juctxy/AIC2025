@@ -1,5 +1,3 @@
-
-
 import os
 import re
 import shutil
@@ -13,6 +11,15 @@ DATA_DIR = r"D:\Data"
 # Group 2 = video part (e.g. "V001")
 NAME_PATTERN = re.compile(r"^([A-Za-z]+\d+)[-_]?(V\d+)$")
 
+# Prefix letters that should use "-" instead of "_"
+DASH_PREFIXES = {"N"}
+
+
+def get_correct_separator(prefix):
+    """Return '-' for N-prefixed folders (e.g. N038), '_' for everything else."""
+    letters = re.match(r"[A-Za-z]+", prefix).group().upper()
+    return "-" if letters in DASH_PREFIXES else "_"
+
 
 def find_misplaced_folders(data_dir):
     """
@@ -20,7 +27,7 @@ def find_misplaced_folders(data_dir):
     (current_path, correct_top_folder, correct_video_name, correct_path)
     for any video folder that either:
       - sits under the wrong top-level folder, or
-      - uses "-" instead of "_" (or any other mismatch vs the normalized name)
+      - uses the wrong separator (N* -> "-", others -> "_")
     """
     moves = []
 
@@ -44,8 +51,9 @@ def find_misplaced_folders(data_dir):
                 continue
 
             prefix, vpart = match.group(1), match.group(2)
-            correct_name = f"{prefix}_{vpart}"          # normalized, e.g. "N031_V001"
-            correct_top = prefix                         # e.g. "N031"
+            sep = get_correct_separator(prefix)
+            correct_name = f"{prefix}{sep}{vpart}"       # e.g. "N031-V001" or "M01_V001"
+            correct_top = prefix                          # e.g. "N031"
             correct_path = os.path.join(data_dir, correct_top, "keyframes", correct_name)
 
             if video_path != correct_path:
