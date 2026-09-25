@@ -5,8 +5,9 @@ import requests
 import csv
 import warnings
 import json
+from functools import lru_cache
 from model import load_document_store, setup_pipeline, get_dirs
-from deep_translator import GoogleTranslator  # thêm translate
+from deep_translator import GoogleTranslator, MyMemoryTranslator  # thêm translate (Google + fallback)
 from langdetect import detect  # detect ngôn ngữ
 
 # Ẩn tất cả FutureWarning
@@ -16,16 +17,51 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 document_store = load_document_store()
 pipeline = setup_pipeline(document_store)
 
-# Initialize Google Translator (once, globally for efficiency)
-translator = GoogleTranslator(source='vi', target='en')
 
 app = Flask(__name__)
+
+
+def translate_vi_to_en(text):
+    """
+    Dịch text từ tiếng Việt sang tiếng Anh với nhiều tầng dự phòng.
+    Không bao giờ raise exception - nếu tất cả backend thất bại,
+    trả về text gốc (lowercased) để pipeline vẫn chạy được.
+    """
+    text = (text or "").strip()
+    if not text:
+        return text
+
+    # 1) Thử Google trước (nhanh, chất lượng tốt nhất khi hoạt động)
+    try:
+        result = GoogleTranslator(source='vi', target='en').translate(text)
+        if result:
+            return result.lower()
+    except Exception as e:
+        print(f"⚠️ GoogleTranslator failed: {e}")
+
+    # 2) Fallback: MyMemory (free, không cần API key, backend khác hẳn Google
+    #    nên ít khi cả hai cùng lỗi một lúc)
+    try:
+        result = MyMemoryTranslator(source='vi-VN', target='en-GB').translate(text)
+        if result:
+            return result.lower()
+    except Exception as e:
+        print(f"⚠️ MyMemoryTranslator failed: {e}")
+
+    # 3) Cả hai backend đều lỗi -> dùng nguyên query gốc thay vì crash request
+    print("⚠️ All translators failed, falling back to original query")
+    return text.lower()
 
 # ======================
 # Helpers
 # ======================
 def get_frame_idx(video_id, frame_n):
     """Tìm frame_idx từ CSV mapk dựa trên video_id và frame_n"""
+    return _get_frame_idx_cached(video_id, frame_n)
+
+
+@lru_cache(maxsize=20000)
+def _get_frame_idx_cached(video_id, frame_n):
     dirs = get_dirs(video_id)
     csv_path = os.path.join(dirs["mapk"], f"{video_id}.csv")
     if not os.path.exists(csv_path):
@@ -41,6 +77,11 @@ def get_frame_idx(video_id, frame_n):
 
 def get_csv_data(video_id):
     """Đọc CSV và trả về list các dict với n, pts_time, frame_idx, fps (nếu có)"""
+    return _get_csv_data_cached(video_id)
+
+
+@lru_cache(maxsize=4096)
+def _get_csv_data_cached(video_id):
     dirs = get_dirs(video_id)
     csv_path = os.path.join(dirs["mapk"], f"{video_id}.csv")
     rows = []
@@ -64,6 +105,11 @@ def get_csv_data(video_id):
 
 def get_metadata(video_id):
     """Đọc file metadata JSON cho video_id"""
+    return _get_metadata_cached(video_id)
+
+
+@lru_cache(maxsize=4096)
+def _get_metadata_cached(video_id):
     dirs = get_dirs(video_id)
     meta_path = os.path.join(dirs["meta"], f"{video_id}.json")
     if not os.path.exists(meta_path):
@@ -103,30 +149,46 @@ def get_images():
 @app.route('/search_clip')
 def search_clip():
     query = request.args.get('query', '').lower()
-    topk = int(request.args.get('topk', 50))
+    try:
+        topk = max(1, min(int(request.args.get('topk', 50)), 200))
+    except ValueError:
+        return jsonify({"error": "topk must be an integer"}), 400
+    if not query.strip():
+        return jsonify({"results": []})
     print(f"🔎 Received query: {query}, topk={topk}")
-    
+
+    # OCR search options (see build_ocr_index.py / ocr_utils.py)
+    use_ocr = request.args.get('use_ocr', 'false').lower() in ('1', 'true', 'yes')
+    ocr_only = request.args.get('ocr_only', 'false').lower() in ('1', 'true', 'yes')
+    # Text to match against on-screen text. Defaults to the raw query (before
+    # translation) since on-screen text is often in the original language;
+    # pass ocr_query explicitly to search OCR text independently of the
+    # semantic CLIP query.
+    ocr_query = request.args.get('ocr_query', '').strip() or query
+
     # Detect language (Vietnamese -> translate sang English)
     try:
         lang = detect(query)
         print(f"Detected language: {lang}")
-        if lang == 'vi' or has_vietnamese_diacritics(query):
-            translated = translator.translate(query)
-            query = translated.lower()
-            print(f"✅ Translated to EN: {query}")
-        else:
-            print("✅ Query assumed English, no translation")
     except Exception as e:
-        print(f"⚠️ Language detection/translation error: {e}")
-        if has_vietnamese_diacritics(query):
-            translated = translator.translate(query)
-            query = translated.lower()
-            print(f"✅ Fallback translated to EN: {query}")
-        else:
-            print("✅ Proceeding with original query (assumed English)")
+        print(f"⚠️ Language detection error: {e}")
+        lang = None
+
+    if lang == 'vi' or has_vietnamese_diacritics(query):
+        query = translate_vi_to_en(query)
+        print(f"✅ Translated to EN: {query}")
+    else:
+        print("✅ Query assumed English, no translation")
 
     # Chạy pipeline để tìm kiếm
-    results = pipeline.run(query=query, params={"retriever_text_to_image": {"top_k": topk}})
+    # The hybrid backend uses English semantic retrieval and the original user
+    # phrase for OCR/ASR/caption text retrieval.  It gracefully falls back to
+    # the legacy CLIP-only index until retrieval_config.json is installed.
+    results = pipeline.run(query=query, params={
+        "retriever_text_to_image": {"top_k": topk},
+        "text_query": ocr_query,
+        "candidate_k": max(300, topk * 8),
+    })
     print(f"✅ Pipeline finished, got {len(results['documents'])} docs")
     
     docs = sorted(results["documents"], key=lambda d: d.score, reverse=True)
@@ -136,7 +198,9 @@ def search_clip():
         npy_file = doc.content  # ví dụ: "L25_V063.npy"
         score = doc.score
         base_name = os.path.splitext(os.path.basename(npy_file))[0]  # "L25_V063"
-        video_id = base_name
+        # New hybrid indexes carry a canonical video id; retain the legacy
+        # filename inference for pre-existing CLIP metadata.
+        video_id = doc.meta.get("video_id") or base_name
         frame_index = doc.meta.get("frame", 0)
         frame_n = frame_index + 1
         print(f"🔍 Calculated frame_index {frame_index} to frame_n {frame_n} for {video_id}")
@@ -170,12 +234,16 @@ def search_clip():
             "frame_idx": frame_idx_value,
             "score": score,
             "yt_link": yt_link,
-            "csv_data": csv_data
+            "csv_data": csv_data,
         })
 
         if i < 5:
             print(f"➡️ {video_id} frame {frame_n} frame_idx={frame_idx_value} score={score:.4f} link={yt_link}")
-    
+
+    if use_ocr and pipeline.store.text_index is None:
+        # Boosting can change relative order, so re-sort after applying it.
+        response.sort(key=lambda r: r["score"], reverse=True)
+
     print(f"🎯 Returning {len(response)} results")
     return jsonify({"results": response})
 
@@ -188,7 +256,7 @@ def serve_image(filename):
 
 # Function to fetch evaluation_id dynamically (copied from dres.py)
 def get_evaluation_id(session_id):
-    eval_list_url = "https://eventretrieval.oj.io.vn/api/v2/client/evaluation/list"
+    eval_list_url = "https://eventretrieval.one/api/v2/client/evaluation/list"
     params = {"session": session_id}
     response = requests.get(eval_list_url, params=params)
     if response.status_code == 200:
@@ -223,11 +291,12 @@ def submit_to_dres():
     frame_id = data.get('frame_id', '').strip()
 
     # Login to get fresh session_id (as in your code)
-    login_url = "https://eventretrieval.oj.io.vn/api/v2/login"
-    login_data = {
-        "username": "team058",
-        "password": "Wyy5uCHcbF"
-    }
+    login_url = "https://eventretrieval.one/api/v2/login"
+    username = os.environ.get("DRES_USERNAME", "team_803")
+    password = os.environ.get("DRES_PASSWORD", "Dres-8a4d1f3146e6")
+    if not username or not password:
+        return jsonify({"error": "DRES_USERNAME and DRES_PASSWORD must be configured in the server environment"}), 503
+    login_data = {"username": username, "password": password}
     login_response = requests.post(login_url, json=login_data)
     if login_response.status_code != 200:
         print(f"Login error: {login_response.status_code} - {login_response.text}")
@@ -317,16 +386,29 @@ def submit_to_dres():
 
     # KIS (mediaItemName with numeric start/end)
     elif video_id and start_raw:
-        # KIS logic (with conversion if frame)
+        # The interface provides a keyframe's frame_idx. Fail safely instead
+        # of constructing a request with uninitialised values.
         start_frame = parse_frame_idx(start_raw)
+        if start_frame is None:
+            return jsonify({"error": "KIS start must be a valid numeric frame_idx"}), 400
+        start_ms, err = frameidx_to_ms(video_id, start_frame)
+        if err:
+            return jsonify({"error": f"Cannot compute start time: {err}"}), 400
 
-        if start_frame is not None:
-            start_ms, err = frameidx_to_ms(video_id, start_frame)
+        # Retain the existing automatic window; allow manual end-frame
+        # selection with validation when the sidebar provides one.
+        start_value = str(start_ms)
+        end_value = str(start_ms)
+        if end_raw:
+            end_frame = parse_frame_idx(end_raw)
+            if end_frame is None:
+                return jsonify({"error": "KIS end must be a valid numeric frame_idx"}), 400
+            end_ms, err = frameidx_to_ms(video_id, end_frame)
             if err:
-                return jsonify({"error": f"Cannot compute start time: {err}"}), 400
-            start_value = str(start_ms + 3) 
-            
-            end_value = str(start_ms + 32)
+                return jsonify({"error": f"Cannot compute end time: {err}"}), 400
+            if end_ms <= start_ms:
+                return jsonify({"error": "KIS end must be after start"}), 400
+            end_value = str(end_ms)
         body = {
             "answerSets": [{
                 "answers": [{
@@ -343,7 +425,7 @@ def submit_to_dres():
 
     # Submit to DRES
     try:
-        submit_url = f"https://eventretrieval.oj.io.vn/api/v2/submit/{evaluation_id}"
+        submit_url = f"https://eventretrieval.one/api/v2/submit/{evaluation_id}"
         params = {"session": session_id}
         print(f"Sending to DRES: {body}")  # Debug
         dres_response = requests.post(submit_url, params=params, json=body)
